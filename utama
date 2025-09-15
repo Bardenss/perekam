@@ -1,19 +1,20 @@
---// Recorder Script Final + Respawn + Copy per Chunk + Copy Total Checklist
+--// Recorder Script Final + Respawn + Copy per Chunk + Copy Total Checklist + CFrame & Angles
 
 -- Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 
--- Variabel
+-- Variables
 local recording = false
 local tempData = {}
 local recordingsChunk = {}
 local checklist = {}
 local playing = false
 
--- File simpan lokal
+-- File save lokal
 local saveFile = "recorder_"..player.UserId..".json"
 
 -- Load dari file
@@ -26,14 +27,21 @@ if isfile and isfile(saveFile) then
     end
 end
 
--- Fungsi save ke file
+-- Save ke file
 local function saveRecordings()
     if writefile then
         writefile(saveFile, HttpService:JSONEncode({chunk = recordingsChunk}))
     end
 end
 
--- Fungsi replay satu data
+-- Raycast ke bawah untuk dapatkan kaki
+local function getGroundY(pos)
+    local ray = Ray.new(pos, Vector3.new(0,-100,0))
+    local part, hitPos = Workspace:FindPartOnRay(ray)
+    if hitPos then return hitPos.Y else return pos.Y end
+end
+
+-- Replay satu data
 local function replay(data)
     local char = player.Character or player.CharacterAdded:Wait()
     local hrp = char:WaitForChild("HumanoidRootPart")
@@ -42,13 +50,13 @@ local function replay(data)
         if not playing then break end
         local waitTime = (frame.t - (tick() - startTime))
         if waitTime > 0 then task.wait(waitTime) end
-        if frame.pos then
-            hrp.CFrame = CFrame.new(Vector3.new(frame.pos.x, frame.pos.y, frame.pos.z))
+        if frame.cf then
+            hrp.CFrame = frame.cf
         end
     end
 end
 
--- Fungsi replay checklist looping
+-- Replay checklist looping
 local function playChecklist()
     if playing then return end
     playing = true
@@ -89,14 +97,6 @@ local function styleFrame(frame, bg, corner)
     frame.BorderSizePixel = 0
     local uic = Instance.new("UICorner", frame)
     uic.CornerRadius = UDim.new(0, corner or 10)
-    local shadow = Instance.new("ImageLabel", frame)
-    shadow.ZIndex = frame.ZIndex - 1
-    shadow.Size = UDim2.new(1,20,1,20)
-    shadow.Position = UDim2.new(0,-10,0,-10)
-    shadow.BackgroundTransparency = 1
-    shadow.Image = "rbxassetid://1316045217"
-    shadow.ImageColor3 = Color3.fromRGB(0,0,0)
-    shadow.ImageTransparency = 0.7
 end
 
 -- Buttons
@@ -172,7 +172,7 @@ styleFrame(stopBtn, Color3.fromRGB(255,180,100), 12)
 styleFrame(respawnBtn, Color3.fromRGB(100,220,150), 12)
 styleFrame(floatingBtn, Color3.fromRGB(230,230,230), 12)
 
--- Update chunk list
+-- Update chunk list function
 local function updateChunkList()
     for _, child in ipairs(chunkMenu:GetChildren()) do
         if child:IsA("Frame") then child:Destroy() end
@@ -197,10 +197,7 @@ local function updateChunkList()
                 rec.checked = false
                 rec.order = nil
                 for i,v in ipairs(checklist) do
-                    if v == rec then
-                        table.remove(checklist,i)
-                        break
-                    end
+                    if v == rec then table.remove(checklist,i) break end
                 end
             else
                 rec.checked = true
@@ -234,7 +231,7 @@ local function updateChunkList()
             spawn(function() replay(rec.data) end)
         end)
 
-        -- Copy per chunk
+        -- Copy per chunk (Lua format)
         local copyBtn = Instance.new("TextButton", item)
         copyBtn.Size = UDim2.new(0.2,0,1,0)
         copyBtn.Position = UDim2.new(0.55,0,0,0)
@@ -243,17 +240,15 @@ local function updateChunkList()
         styleFrame(copyBtn, Color3.fromRGB(150,200,120), 6)
 
         copyBtn.MouseButton1Click:Connect(function()
-            local points = {}
+            local lines = {}
             for _, frame in ipairs(rec.data) do
-                if frame.pos then
-                    table.insert(points, string.format("[%f,%f,%f]", frame.pos.x, frame.pos.y, frame.pos.z))
-                end
+                local cf = frame.cf
+                local x,y,z = cf.Position.X, cf.Position.Y, cf.Position.Z
+                local rx, ry, rz = cf:ToEulerAnglesXYZ()
+                table.insert(lines, string.format("CFrame.new(%f,%f,%f) * CFrame.Angles(%f,%f,%f)", x,y,z,rx,ry,rz))
             end
-            local json = "{\n  \"name\":\""..(rec.name or "Chunk").."\",\n  \"points\":[\n    "
-            json = json .. table.concat(points, ",\n    ") .. "\n  ]\n}"
-            if setclipboard then
-                setclipboard(json)
-            end
+            local text = "local "..(rec.name or "Chunk").." = {\n    "..table.concat(lines,",\n    ").."\n}"
+            if setclipboard then setclipboard(text) end
         end)
 
         -- Delete
@@ -285,23 +280,21 @@ local function updateChunkList()
     styleFrame(totalBtn, Color3.fromRGB(100,180,255), 8)
 
     totalBtn.MouseButton1Click:Connect(function()
-        local points = {}
+        local lines = {}
         for _, rec in ipairs(checklist) do
             for _, frame in ipairs(rec.data) do
-                if frame.pos then
-                    table.insert(points, string.format("[%f,%f,%f]", frame.pos.x, frame.pos.y, frame.pos.z))
-                end
+                local cf = frame.cf
+                local x,y,z = cf.Position.X, cf.Position.Y, cf.Position.Z
+                local rx, ry, rz = cf:ToEulerAnglesXYZ()
+                table.insert(lines, string.format("CFrame.new(%f,%f,%f) * CFrame.Angles(%f,%f,%f)", x,y,z,rx,ry,rz))
             end
         end
-        local json = "{\n  \"name\":\"total\",\n  \"points\":[\n    "
-        json = json .. table.concat(points, ",\n    ") .. "\n  ]\n}"
-        if setclipboard then
-            setclipboard(json)
-        end
+        local text = "local total = {\n    "..table.concat(lines,",\n    ").."\n}"
+        if setclipboard then setclipboard(text) end
     end)
 end
 
--- Tombol minimize
+-- Buttons minimize/floating
 minimizeBtn.MouseButton1Click:Connect(function()
     mainFrame.Visible = false
     floatingBtn.Visible = true
@@ -325,9 +318,12 @@ recordBtn.MouseButton1Click:Connect(function()
             local char = player.Character
             if char and char:FindFirstChild("HumanoidRootPart") then
                 local hrp = char.HumanoidRootPart
+                -- pastikan kaki di tanah
+                local yGround = getGroundY(hrp.Position)
+                local cf = CFrame.new(hrp.Position.X, yGround, hrp.Position.Z) * hrp.CFrame - hrp.CFrame.Position
                 table.insert(tempData, {
                     t = tick()-startTime,
-                    pos = {x = hrp.Position.X, y = hrp.Position.Y, z = hrp.Position.Z}
+                    cf = cf
                 })
             end
         end)
