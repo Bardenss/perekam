@@ -1,382 +1,230 @@
---// Recorder Script Final + Respawn + Copy per Chunk + Copy Total Checklist + CFrame & Angles
+-- Replay recorder (iOS friendly - memory + clipboard only + rename + delete + Lua export)
+local player = game.Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart")
 
--- Services
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
+player.CharacterAdded:Connect(function(newChar)
+    char = newChar
+    hrp = char:WaitForChild("HumanoidRootPart")
+end)
+
 local HttpService = game:GetService("HttpService")
-local player = Players.LocalPlayer
+local records = {}
+local isRecording = false
+local isPlaying = false
+local frameTime = 1/30 -- 30 FPS
+local replayList = {} -- simpan replay di memori
 
--- Variables
-local recording = false
-local tempData = {}
-local recordingsChunk = {}
-local checklist = {}
-local playing = false
+-- ===== Recording =====
+function startRecord()
+    if isRecording then return end
+    records = {}
+    isRecording = true
+    if recordBtn then recordBtn.Text = "⏸ Pause Record" end
 
--- File save lokal
-local saveFile = "recorder_"..player.UserId..".json"
-
--- Load dari file
-if isfile and isfile(saveFile) then
-    local ok, data = pcall(function()
-        return HttpService:JSONDecode(readfile(saveFile))
-    end)
-    if ok and data then
-        recordingsChunk = data.chunk or {}
-    end
-end
-
--- Save ke file
-local function saveRecordings()
-    if writefile then
-        writefile(saveFile, HttpService:JSONEncode({chunk = recordingsChunk}))
-    end
-end
-
--- Raycast ke bawah untuk dapatkan kaki
-local function getGroundY(pos)
-    local ray = Ray.new(pos, Vector3.new(0,-100,0))
-    local part, hitPos = Workspace:FindPartOnRay(ray)
-    if hitPos then return hitPos.Y else return pos.Y end
-end
-
--- Replay satu data
-local function replay(data)
-    local char = player.Character or player.CharacterAdded:Wait()
-    local hrp = char:WaitForChild("HumanoidRootPart")
-    local startTime = tick()
-    for _, frame in ipairs(data) do
-        if not playing then break end
-        local waitTime = (frame.t - (tick() - startTime))
-        if waitTime > 0 then task.wait(waitTime) end
-        if frame.cf then
-            hrp.CFrame = frame.cf
+    task.spawn(function()
+        while isRecording do
+            if hrp then
+                table.insert(records, { pos = hrp.CFrame })
+            end
+            task.wait(frameTime)
         end
-    end
-end
-
--- Replay checklist looping
-local function playChecklist()
-    if playing then return end
-    playing = true
-    while playing do
-        table.sort(checklist,function(a,b) return (a.order or 0) < (b.order or 0) end)
-        for _,rec in ipairs(checklist) do
-            if not playing then break end
-            if rec.isRespawn then
-                local char = player.Character
-                if char and char:FindFirstChild("Humanoid") then
-                    char.Humanoid.Health = 0
-                end
-                local newChar = player.CharacterAdded:Wait()
-                newChar:WaitForChild("HumanoidRootPart")
-                task.wait(1)
-            else
-                replay(rec.data)
-            end
-        end
-    end
-end
-
--- GUI
-local screenGui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-screenGui.Name = "RecorderGui"
-screenGui.ResetOnSpawn = false
-
-local mainFrame = Instance.new("Frame", screenGui)
-mainFrame.Size = UDim2.new(0,400,0,350)
-mainFrame.Position = UDim2.new(0.5,-200,0.3,-175)
-mainFrame.BackgroundColor3 = Color3.fromRGB(245,245,245)
-mainFrame.Active = true
-mainFrame.Draggable = true
-
--- Style helper
-local function styleFrame(frame, bg, corner)
-    frame.BackgroundColor3 = bg
-    frame.BorderSizePixel = 0
-    local uic = Instance.new("UICorner", frame)
-    uic.CornerRadius = UDim.new(0, corner or 10)
-end
-
--- Buttons
-local minimizeBtn = Instance.new("TextButton", mainFrame)
-minimizeBtn.Size = UDim2.new(0,50,0,30)
-minimizeBtn.Position = UDim2.new(1,-55,0,5)
-minimizeBtn.Text = "_"
-minimizeBtn.TextColor3 = Color3.new(1,1,1)
-
-local killBtn = Instance.new("TextButton", mainFrame)
-killBtn.Size = UDim2.new(0,50,0,30)
-killBtn.Position = UDim2.new(1,-110,0,5)
-killBtn.Text = "X"
-killBtn.TextColor3 = Color3.new(1,1,1)
-killBtn.MouseButton1Click:Connect(function() screenGui.Enabled=false end)
-
-local recordBtn = Instance.new("TextButton", mainFrame)
-recordBtn.Size = UDim2.new(0,120,0,40)
-recordBtn.Position = UDim2.new(0,20,0,50)
-recordBtn.Text = "Record"
-recordBtn.TextColor3 = Color3.new(1,1,1)
-
-local playCheckBtn = Instance.new("TextButton", mainFrame)
-playCheckBtn.Size = UDim2.new(0,120,0,40)
-playCheckBtn.Position = UDim2.new(0,160,0,50)
-playCheckBtn.Text = "Play Checklist"
-playCheckBtn.TextColor3 = Color3.new(1,1,1)
-
-local stopBtn = Instance.new("TextButton", mainFrame)
-stopBtn.Size = UDim2.new(0,80,0,40)
-stopBtn.Position = UDim2.new(0,300,0,50)
-stopBtn.Text = "Stop"
-stopBtn.TextColor3 = Color3.new(1,1,1)
-
-local respawnBtn = Instance.new("TextButton", mainFrame)
-respawnBtn.Size = UDim2.new(0,120,0,40)
-respawnBtn.Position = UDim2.new(0,20,0,310)
-respawnBtn.Text = "Respawn"
-respawnBtn.TextColor3 = Color3.new(1,1,1)
-respawnBtn.MouseButton1Click:Connect(function()
-    local char = player.Character
-    if char and char:FindFirstChild("Humanoid") then
-        char.Humanoid.Health = 0
-    end
-end)
-
--- Scrollable chunk list
-local chunkMenu = Instance.new("ScrollingFrame", mainFrame)
-chunkMenu.Size = UDim2.new(0,360,0,200)
-chunkMenu.Position = UDim2.new(0,20,0,100)
-chunkMenu.BackgroundColor3 = Color3.fromRGB(230,230,230)
-chunkMenu.ScrollBarThickness = 8
-local chunkList = Instance.new("UIListLayout", chunkMenu)
-chunkList.Padding = UDim.new(0,5)
-chunkList.SortOrder = Enum.SortOrder.LayoutOrder
-
--- Floating button
-local floatingBtn = Instance.new("TextButton", screenGui)
-floatingBtn.Size = UDim2.new(0,80,0,40)
-floatingBtn.Position = UDim2.new(0,50,0,50)
-floatingBtn.Text = "Recorder"
-floatingBtn.BackgroundColor3 = Color3.fromRGB(200,200,200)
-floatingBtn.TextColor3 = Color3.new(0,0,0)
-floatingBtn.Visible = false
-floatingBtn.Active = true
-floatingBtn.Draggable = true
-
--- Styling
-styleFrame(mainFrame, Color3.fromRGB(245,245,245), 15)
-styleFrame(recordBtn, Color3.fromRGB(255,100,100), 12)
-styleFrame(playCheckBtn, Color3.fromRGB(100,180,255), 12)
-styleFrame(stopBtn, Color3.fromRGB(255,180,100), 12)
-styleFrame(respawnBtn, Color3.fromRGB(100,220,150), 12)
-styleFrame(floatingBtn, Color3.fromRGB(230,230,230), 12)
-
--- Update chunk list function
-local function updateChunkList()
-    for _, child in ipairs(chunkMenu:GetChildren()) do
-        if child:IsA("Frame") then child:Destroy() end
-    end
-    for i, rec in ipairs(recordingsChunk) do
-        local item = Instance.new("Frame", chunkMenu)
-        item.Size = UDim2.new(1,0,0,30)
-        item.BackgroundColor3 = Color3.fromRGB(240,240,240)
-        item.LayoutOrder = i
-        styleFrame(item, Color3.fromRGB(240,240,240), 8)
-
-        -- Checkbox
-        local checkBox = Instance.new("TextButton", item)
-        checkBox.Size = UDim2.new(0.1,0,1,0)
-        checkBox.Text = rec.checked and tostring(rec.order or "") or ""
-        checkBox.BackgroundColor3 = Color3.fromRGB(200,200,200)
-        checkBox.TextColor3 = Color3.new(0,0,0)
-        styleFrame(checkBox, Color3.fromRGB(200,200,200), 6)
-
-        checkBox.MouseButton1Click:Connect(function()
-            if rec.checked then
-                rec.checked = false
-                rec.order = nil
-                for i,v in ipairs(checklist) do
-                    if v == rec then table.remove(checklist,i) break end
-                end
-            else
-                rec.checked = true
-                rec.order = #checklist + 1
-                table.insert(checklist, rec)
-            end
-            updateChunkList()
-        end)
-
-        -- Name
-        local nameBox = Instance.new("TextBox", item)
-        nameBox.Size = UDim2.new(0.25,0,1,0)
-        nameBox.Position = UDim2.new(0.1,0,0,0)
-        nameBox.Text = rec.name or ("Chunk "..i)
-        nameBox.TextColor3 = Color3.new(0,0,0)
-        nameBox.BackgroundColor3 = Color3.fromRGB(220,220,220)
-        styleFrame(nameBox, Color3.fromRGB(220,220,220), 6)
-        nameBox.FocusLost:Connect(function()
-            rec.name = nameBox.Text
-            saveRecordings()
-        end)
-
-        -- Play button
-        local replayBtn = Instance.new("TextButton", item)
-        replayBtn.Size = UDim2.new(0.2,0,1,0)
-        replayBtn.Position = UDim2.new(0.35,0,0,0)
-        replayBtn.Text = "Play"
-        replayBtn.TextColor3 = Color3.new(1,1,1)
-        styleFrame(replayBtn, Color3.fromRGB(100,180,255), 6)
-        replayBtn.MouseButton1Click:Connect(function()
-            spawn(function() replay(rec.data) end)
-        end)
-
-        -- Copy per chunk (Lua format)
-        local copyBtn = Instance.new("TextButton", item)
-        copyBtn.Size = UDim2.new(0.2,0,1,0)
-        copyBtn.Position = UDim2.new(0.55,0,0,0)
-        copyBtn.Text = "Copy"
-        copyBtn.TextColor3 = Color3.new(1,1,1)
-        styleFrame(copyBtn, Color3.fromRGB(150,200,120), 6)
-
-        copyBtn.MouseButton1Click:Connect(function()
-            local lines = {}
-            for _, frame in ipairs(rec.data) do
-                local cf = frame.cf
-                local x,y,z = cf.Position.X, cf.Position.Y, cf.Position.Z
-                local rx, ry, rz = cf:ToEulerAnglesXYZ()
-                table.insert(lines, string.format("CFrame.new(%f,%f,%f) * CFrame.Angles(%f,%f,%f)", x,y,z,rx,ry,rz))
-            end
-            local text = "local "..(rec.name or "Chunk").." = {\n    "..table.concat(lines,",\n    ").."\n}"
-            if setclipboard then setclipboard(text) end
-        end)
-
-        -- Delete
-        local delBtn = Instance.new("TextButton", item)
-        delBtn.Size = UDim2.new(0.25,0,1,0)
-        delBtn.Position = UDim2.new(0.75,0,0,0)
-        delBtn.Text = "Del"
-        delBtn.TextColor3 = Color3.new(1,1,1)
-        styleFrame(delBtn, Color3.fromRGB(255,100,100), 6)
-        delBtn.MouseButton1Click:Connect(function()
-            table.remove(recordingsChunk, i)
-            updateChunkList()
-            saveRecordings()
-        end)
-    end
-
-    -- Copy Total Checklist
-    local totalItem = Instance.new("Frame", chunkMenu)
-    totalItem.Size = UDim2.new(1,0,0,30)
-    totalItem.BackgroundColor3 = Color3.fromRGB(200,230,250)
-    totalItem.LayoutOrder = #recordingsChunk + 1
-    styleFrame(totalItem, Color3.fromRGB(200,230,250), 8)
-
-    local totalBtn = Instance.new("TextButton", totalItem)
-    totalBtn.Size = UDim2.new(1,0,1,0)
-    totalBtn.Position = UDim2.new(0,0,0,0)
-    totalBtn.Text = "Copy Total Checklist"
-    totalBtn.TextColor3 = Color3.new(0,0,0)
-    styleFrame(totalBtn, Color3.fromRGB(100,180,255), 8)
-
-    totalBtn.MouseButton1Click:Connect(function()
-        local lines = {}
-        for _, rec in ipairs(checklist) do
-            for _, frame in ipairs(rec.data) do
-                local cf = frame.cf
-                local x,y,z = cf.Position.X, cf.Position.Y, cf.Position.Z
-                local rx, ry, rz = cf:ToEulerAnglesXYZ()
-                table.insert(lines, string.format("CFrame.new(%f,%f,%f) * CFrame.Angles(%f,%f,%f)", x,y,z,rx,ry,rz))
-            end
-        end
-        local text = "local total = {\n    "..table.concat(lines,",\n    ").."\n}"
-        if setclipboard then setclipboard(text) end
     end)
 end
 
--- Buttons minimize/floating
-minimizeBtn.MouseButton1Click:Connect(function()
-    mainFrame.Visible = false
-    floatingBtn.Visible = true
-end)
-floatingBtn.MouseButton1Click:Connect(function()
-    mainFrame.Visible = true
-    floatingBtn.Visible = false
-end)
+function stopRecord()
+    if not isRecording then return end
+    isRecording = false
+    if recordBtn then recordBtn.Text = "⏺ Start Record" end
 
--- Tombol Record
-recordBtn.MouseButton1Click:Connect(function()
-    if not recording then
-        tempData = {}
-        recording = true
-        recordBtn.Text = "Stop"
-        recordBtn.BackgroundColor3 = Color3.fromRGB(0,120,0)
-        local startTime = tick()
-        local hbConn
-        hbConn = RunService.Heartbeat:Connect(function()
-            if not recording then hbConn:Disconnect() return end
-            local char = player.Character
-            if char and char:FindFirstChild("HumanoidRootPart") then
-                local hrp = char.HumanoidRootPart
-                -- pastikan kaki di tanah
-                local yGround = getGroundY(hrp.Position)
-                local cf = CFrame.new(hrp.Position.X, yGround, hrp.Position.Z) * hrp.CFrame - hrp.CFrame.Position
-                table.insert(tempData, {
-                    t = tick()-startTime,
-                    cf = cf
-                })
+    if #records > 0 then
+        local name = os.date("Replay_%H%M%S.json")
+        replayList[name] = table.clone(records)
+        print("✅ Replay disimpan ke list:", name, "Frames:", #records)
+        refreshReplayList()
+    end
+end
+
+-- ===== Playback =====
+function playRecord()
+    if #records < 2 then
+        warn("❌ Tidak ada replay yang dimuat/rekaman terlalu pendek.")
+        return
+    end
+    isPlaying = true
+    for i = 1, #records-1 do
+        if not isPlaying then break end
+        local startPos = records[i].pos
+        local endPos = records[i+1].pos
+        local t = 0
+        while t < frameTime do
+            if not isPlaying then break end
+            t += task.wait()
+            local alpha = math.min(t/frameTime, 1)
+            if hrp and hrp.Parent and hrp:IsDescendantOf(workspace) then
+                hrp.CFrame = startPos:Lerp(endPos, alpha)
             end
-        end)
+        end
+    end
+    isPlaying = false
+end
+
+function stopPlay()
+    isPlaying = false
+end
+
+-- ===== Export ke Lua Format =====
+local function encodeRecordsToLua(rec)
+    local lines = {"return {"}
+    for _, frame in ipairs(rec) do
+        local pos = frame.pos.Position
+        local rotX, rotY, rotZ = frame.pos:ToOrientation()
+        table.insert(lines,
+            string.format("    CFrame.new(%.15f,%.15f,%.15f) * CFrame.Angles(%.15f,%.15f,%.15f),",
+            pos.X, pos.Y, pos.Z, rotX, rotY, rotZ)
+        )
+    end
+    table.insert(lines, "}")
+    return table.concat(lines, "\n")
+end
+
+-- ===== GUI =====
+local gui = Instance.new("ScreenGui", game.CoreGui)
+gui.ResetOnSpawn = false
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 260, 0, 380)
+frame.Position = UDim2.new(0, 20, 0.5, -190)
+frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+frame.Active = true
+frame.Draggable = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+local function makeBtn(ref, text, pos, callback, color)
+    local btn = Instance.new("TextButton", frame)
+    btn.Size = UDim2.new(1, -20, 0, 34)
+    btn.Position = UDim2.new(0, 10, 0, pos)
+    btn.Text = text
+    btn.BackgroundColor3 = color or Color3.fromRGB(0, 170, 255)
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 14
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    btn.MouseButton1Click:Connect(callback)
+    if ref then
+        _G[ref] = btn
+    end
+    return btn
+end
+
+recordBtn = makeBtn("recordBtn", "⏺ Start Record", 50, function()
+    if isRecording then
+        stopRecord()
     else
-        recording = false
-        recordBtn.Text = "Record"
-        recordBtn.BackgroundColor3 = Color3.fromRGB(255,100,100)
-        if #tempData > 0 then
-            local rec = {
-                data = tempData,
-                count = #tempData,
-                name = "Chunk "..tostring(os.time())
-            }
-            table.insert(recordingsChunk, rec)
-            updateChunkList()
-            saveRecordings()
-        end
+        startRecord()
     end
 end)
 
--- Tombol play checklist
-playCheckBtn.MouseButton1Click:Connect(function()
-    spawn(playChecklist)
-end)
+makeBtn(nil, "▶️ Play Replay", 100, playRecord)
+makeBtn(nil, "⏹ Stop Replay", 150, stopPlay)
 
--- Tombol stop
-stopBtn.MouseButton1Click:Connect(function()
-    playing = false
-end)
+-- ===== Replay List Window =====
+local replayFrame
+function refreshReplayList()
+    if replayFrame then replayFrame:Destroy() end
+    replayFrame = Instance.new("Frame", gui)
+    replayFrame.Size = UDim2.new(0, 320, 0, 320) -- lebih lebar biar muat tombol
+    replayFrame.Position = UDim2.new(0, 300, 0.5, -160)
+    replayFrame.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    replayFrame.Active = true
+    replayFrame.Draggable = true
+    Instance.new("UICorner", replayFrame).CornerRadius = UDim.new(0, 10)
 
--- Auto-save saat respawn
-player.CharacterAdded:Connect(function(char)
-    if recording then
-        recording = false
-        recordBtn.Text = "Record"
-        recordBtn.BackgroundColor3 = Color3.fromRGB(255,100,100)
-        if #tempData > 0 then
-            local rec = {
-                data = tempData,
-                count = #tempData,
-                name = "Chunk "..tostring(os.time())
-            }
-            table.insert(recordingsChunk, rec)
-            updateChunkList()
-            saveRecordings()
-        end
+    local closeBtn = Instance.new("TextButton", replayFrame)
+    closeBtn.Size = UDim2.new(0, 50, 0, 25)
+    closeBtn.Position = UDim2.new(1, -55, 0, 5)
+    closeBtn.Text = "X"
+    closeBtn.BackgroundColor3 = Color3.fromRGB(200,50,50)
+    closeBtn.TextColor3 = Color3.new(1,1,1)
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0,4)
+    closeBtn.MouseButton1Click:Connect(function()
+        replayFrame:Destroy()
+        replayFrame = nil
+    end)
+
+    local yPos = 35
+    for name, rec in pairs(replayList) do
+        -- Nama replay (bisa diklik untuk load)
+        local btn = Instance.new("TextButton", replayFrame)
+        btn.Size = UDim2.new(0.55, -10, 0, 30)
+        btn.Position = UDim2.new(0, 10, 0, yPos)
+        btn.Text = name
+        btn.BackgroundColor3 = Color3.fromRGB(70,70,70)
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 14
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+
+        btn.MouseButton1Click:Connect(function()
+            records = table.clone(rec)
+            print("✅ Loaded replay:", name, "Frames:", #records)
+        end)
+
+        -- RENAME
+        local renameBtn = Instance.new("TextButton", replayFrame)
+        renameBtn.Size = UDim2.new(0, 50, 0, 30)
+        renameBtn.Position = UDim2.new(0.55, 0, 0, yPos)
+        renameBtn.Text = "REN"
+        renameBtn.BackgroundColor3 = Color3.fromRGB(0,120,255)
+        renameBtn.TextColor3 = Color3.new(1,1,1)
+        Instance.new("UICorner", renameBtn).CornerRadius = UDim.new(0,6)
+        renameBtn.MouseButton1Click:Connect(function()
+            local newName = "Replay_"..os.date("%H%M%S")..".json"
+            replayList[newName] = rec
+            replayList[name] = nil
+            print("✏️ Rename:", name, "➡️", newName)
+            refreshReplayList()
+        end)
+
+        -- COPY
+        local copyBtn = Instance.new("TextButton", replayFrame)
+        copyBtn.Size = UDim2.new(0, 60, 0, 30)
+        copyBtn.Position = UDim2.new(0.55, 55, 0, yPos)
+        copyBtn.Text = "COPY"
+        copyBtn.BackgroundColor3 = Color3.fromRGB(50,200,50)
+        copyBtn.TextColor3 = Color3.new(1,1,1)
+        Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0,6)
+        copyBtn.MouseButton1Click:Connect(function()
+            local exportText = encodeRecordsToLua(rec)
+            if setclipboard then
+                setclipboard(exportText)
+                print("✅ Replay exported to clipboard (Lua format):", name)
+            else
+                warn("❌ setclipboard() tidak tersedia di exploit ini.")
+            end
+        end)
+
+        -- DEL
+        local delBtn = Instance.new("TextButton", replayFrame)
+        delBtn.Size = UDim2.new(0, 50, 0, 30)
+        delBtn.Position = UDim2.new(1, -60, 0, yPos)
+        delBtn.Text = "DEL"
+        delBtn.BackgroundColor3 = Color3.fromRGB(200,50,50)
+        delBtn.TextColor3 = Color3.new(1,1,1)
+        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0,6)
+        delBtn.MouseButton1Click:Connect(function()
+            replayList[name] = nil
+            print("🗑️ Replay dihapus:", name)
+            refreshReplayList()
+        end)
+
+        yPos = yPos + 40
     end
-end)
+end
 
--- Simpan sebelum keluar
-game:BindToClose(function()
-    saveRecordings()
-end)
+makeBtn(nil, "📂 Open Replay List", 200, refreshReplayList, Color3.fromRGB(255,170,0))
 
--- Load awal
-updateChunkList()
+-- ===== Info =====
+spawn(function()
+    wait(0.2)
+    print("ℹ️ Cara pakai: Start → Stop → replay otomatis muncul di list. Dari list bisa Load, Rename, Copy (Lua), atau Delete.")
+end)
