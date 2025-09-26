@@ -1,4 +1,5 @@
--- Replay recorder (iOS friendly - memory + clipboard only + rename + delete + Lua export)
+-- Replay Recorder + Multi-Select Edit (Touch Version)
+
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
@@ -8,223 +9,400 @@ player.CharacterAdded:Connect(function(newChar)
     hrp = char:WaitForChild("HumanoidRootPart")
 end)
 
-local HttpService = game:GetService("HttpService")
 local records = {}
 local isRecording = false
-local isPlaying = false
-local frameTime = 1/30 -- 30 FPS
-local replayList = {} -- simpan replay di memori
+local replayList = {}
+local recordCount = 0
+local frameTime = 1/30
 
--- ===== Recording =====
+-- Simpan replay terpilih (PAKAI ARRAY UNTUK URUTAN CEKLIS)
+local selectedReplays = {}
+local previewFrame = 0
+
+-- ========== Recording ==========
 function startRecord()
     if isRecording then return end
     records = {}
     isRecording = true
-    if recordBtn then recordBtn.Text = "⏸ Pause Record" end
+    recordBtn.Text = "⏸ Stop Record"
 
     task.spawn(function()
         while isRecording do
             if hrp then
-                table.insert(records, { pos = hrp.CFrame })
+                table.insert(records, {pos = hrp.CFrame})
             end
             task.wait(frameTime)
         end
     end)
 end
 
+-- Tambahan Auto Load
+_G.ReplayStorage = _G.ReplayStorage or {}
+replayList = _G.ReplayStorage
+
+recordCount = 0
+for _ in pairs(replayList) do
+    recordCount += 1
+end
+
+local function autoSave()
+    _G.ReplayStorage = replayList
+end
+
 function stopRecord()
     if not isRecording then return end
     isRecording = false
-    if recordBtn then recordBtn.Text = "⏺ Start Record" end
+    recordBtn.Text = "⏺ Start Record"
 
     if #records > 0 then
-        local name = os.date("Replay_%H%M%S.json")
+        recordCount += 1
+        local name = "Replay " .. recordCount
         replayList[name] = table.clone(records)
-        print("✅ Replay disimpan ke list:", name, "Frames:", #records)
+        notify("✅ Replay disimpan: "..name.." ("..#records.." Frames)")
+
+        autoSave()
         refreshReplayList()
     end
 end
 
--- ===== Playback =====
-function playRecord()
-    if #records < 2 then
-        warn("❌ Tidak ada replay yang dimuat/rekaman terlalu pendek.")
+-- ========== Preview Player ==========
+local previewPlaying = false
+
+function playPreview(replays)
+    if not replays or #replays == 0 then return end
+    previewPlaying = true
+
+    task.spawn(function()
+        for _,rec in ipairs(replays) do
+            for i = 1, #rec do
+                if not previewPlaying then return end
+                if hrp then hrp.CFrame = rec[i].pos end
+                previewFrame = i
+                progressBar.Size = UDim2.new(i/#rec,0,1,0)
+                task.wait(frameTime)
+            end
+        end
+        previewPlaying = false
+    end)
+end
+
+function stopPreview()
+    previewPlaying = false
+    progressBar.Size = UDim2.new(0,0,1,0)
+end
+
+-- ========== Custom Cut ==========
+function cutReplay(names)
+    for _,name in ipairs(names) do
+        local rec = replayList[name]
+        if rec and previewFrame > 0 and previewFrame < #rec then
+            local newRec = {}
+            for i = 1, previewFrame do
+                table.insert(newRec, rec[i])
+            end
+            recordCount += 1
+            local newName = name .. " - Cut"
+            replayList[newName] = newRec
+            notify("✂️ Replay dipotong: "..newName.." ("..#newRec.." Frames)")
+        end
+    end
+    refreshReplayList()
+end
+
+-- ========== Gabung Replay ==========
+function mergeReplays(names)
+    if #names < 2 then
+        notify("❌ Pilih minimal 2 replay untuk merge!")
         return
     end
-    isPlaying = true
-    for i = 1, #records-1 do
-        if not isPlaying then break end
-        local startPos = records[i].pos
-        local endPos = records[i+1].pos
-        local t = 0
-        while t < frameTime do
-            if not isPlaying then break end
-            t += task.wait()
-            local alpha = math.min(t/frameTime, 1)
-            if hrp and hrp.Parent and hrp:IsDescendantOf(workspace) then
-                hrp.CFrame = startPos:Lerp(endPos, alpha)
+
+    local merged = {}
+    for _,name in ipairs(names) do
+        local rec = replayList[name]
+        if rec then
+            for _,f in ipairs(rec) do
+                table.insert(merged, f)
             end
         end
     end
-    isPlaying = false
+
+    recordCount += 1
+    local newName = "Merged " .. recordCount
+    replayList[newName] = merged
+    notify("🔗 Replay digabung: "..newName.." ("..#merged.." Frames)")
+
+    autoSave()
+    refreshReplayList()
 end
 
-function stopPlay()
-    isPlaying = false
-end
+-- ========== Copy ke Clipboard ==========
+function copyReplayToClipboard(names)
+    if #names == 0 then return end
 
--- ===== Export ke Lua Format =====
-local function encodeRecordsToLua(rec)
-    local lines = {"return {"}
-    for _, frame in ipairs(rec) do
-        local pos = frame.pos.Position
-        local rotX, rotY, rotZ = frame.pos:ToOrientation()
-        table.insert(lines,
-            string.format("    CFrame.new(%.15f,%.15f,%.15f) * CFrame.Angles(%.15f,%.15f,%.15f),",
-            pos.X, pos.Y, pos.Z, rotX, rotY, rotZ)
-        )
+    local str = "return {\n"
+    for _,name in ipairs(names) do
+        local rec = replayList[name]
+        if rec then
+            for _,f in ipairs(rec) do
+                local pos = f.pos.Position
+                local x, y, z = f.pos:ToOrientation()
+                str = str .. string.format(
+                    "    CFrame.new(%.15f,%.15f,%.15f) * CFrame.Angles(%.15f,%.15f,%.15f),\n",
+                    pos.X, pos.Y, pos.Z,
+                    x, y, z
+                )
+            end
+        end
     end
-    table.insert(lines, "}")
-    return table.concat(lines, "\n")
+    str = str .. "}"
+
+    setclipboard(str)
+    notify("📋 Replay dicopy ke clipboard (sesuai urutan ceklis)")
 end
 
--- ===== GUI =====
+-- ========== Notify ==========
+function notify(msg)
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "Replay System",
+        Text = msg,
+        Duration = 4
+    })
+end
+
+-- ========== GUI ==========
 local gui = Instance.new("ScreenGui", game.CoreGui)
 gui.ResetOnSpawn = false
+
 local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 260, 0, 380)
-frame.Position = UDim2.new(0, 20, 0.5, -190)
-frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+frame.Size = UDim2.new(0,280,0,400)
+frame.Position = UDim2.new(0,20,0.5,-200)
+frame.BackgroundColor3 = Color3.fromRGB(35,35,35)
 frame.Active = true
 frame.Draggable = true
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
 
-local function makeBtn(ref, text, pos, callback, color)
-    local btn = Instance.new("TextButton", frame)
-    btn.Size = UDim2.new(1, -20, 0, 34)
-    btn.Position = UDim2.new(0, 10, 0, pos)
+local function makeBtn(text,y,callback,parent)
+    local btn = Instance.new("TextButton", parent or frame)
+    btn.Size = UDim2.new(1,-20,0,36)
+    btn.Position = UDim2.new(0,10,0,y)
     btn.Text = text
-    btn.BackgroundColor3 = color or Color3.fromRGB(0, 170, 255)
+    btn.BackgroundColor3 = Color3.fromRGB(0,120,255)
     btn.TextColor3 = Color3.new(1,1,1)
     btn.Font = Enum.Font.Gotham
     btn.TextSize = 14
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
     btn.MouseButton1Click:Connect(callback)
-    if ref then
-        _G[ref] = btn
-    end
     return btn
 end
 
-recordBtn = makeBtn("recordBtn", "⏺ Start Record", 50, function()
-    if isRecording then
-        stopRecord()
-    else
-        startRecord()
+recordBtn = makeBtn("⏺ Start Record",40,function()
+    if isRecording then stopRecord() else startRecord() end
+end)
+
+makeBtn("📂 Open Replay List",90,function()
+    refreshReplayList()
+end)
+
+-- Player Frame
+local playerFrame = Instance.new("Frame",frame)
+playerFrame.Size = UDim2.new(1,-20,0,120)
+playerFrame.Position = UDim2.new(0,10,0,150)
+playerFrame.BackgroundColor3 = Color3.fromRGB(50,50,50)
+Instance.new("UICorner",playerFrame).CornerRadius = UDim.new(0,8)
+
+local btnPlay = makeBtn("▶️ Play Selected",5,function()
+    local chosen = {}
+    for _,name in ipairs(selectedReplays) do
+        table.insert(chosen, replayList[name])
+    end
+    playPreview(chosen)
+end,playerFrame)
+btnPlay.Size = UDim2.new(0.48,-5,0,30)
+
+local btnStop = makeBtn("⏹ Stop",5,stopPreview,playerFrame)
+btnStop.Position = UDim2.new(0.52,0,0,5)
+btnStop.Size = UDim2.new(0.48,-5,0,30)
+
+local progressBg = Instance.new("Frame",playerFrame)
+progressBg.Size = UDim2.new(1,-10,0,20)
+progressBg.Position = UDim2.new(0,5,0,45)
+progressBg.BackgroundColor3 = Color3.fromRGB(80,80,80)
+
+progressBar = Instance.new("Frame",progressBg)
+progressBar.Size = UDim2.new(0,0,1,0)
+progressBar.BackgroundColor3 = Color3.fromRGB(0,200,0)
+
+-- Klik progress bar untuk seek
+progressBg.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 
+    or input.UserInputType == Enum.UserInputType.Touch then
+        local relX = (input.Position.X - progressBg.AbsolutePosition.X) / progressBg.AbsoluteSize.X
+        relX = math.clamp(relX, 0, 1)
+
+        local chosen
+        if #selectedReplays > 0 then
+            chosen = replayList[selectedReplays[1]]
+        end
+        if chosen and #chosen > 0 then
+            local frameIndex = math.floor(relX * #chosen)
+            frameIndex = math.clamp(frameIndex,1,#chosen)
+            previewFrame = frameIndex
+            hrp.CFrame = chosen[frameIndex].pos
+            progressBar.Size = UDim2.new(frameIndex/#chosen,0,1,0)
+        end
     end
 end)
 
-makeBtn(nil, "▶️ Play Replay", 100, playRecord)
-makeBtn(nil, "⏹ Stop Replay", 150, stopPlay)
+makeBtn("💾 Save Selected (Cut)",75,function()
+    if #selectedReplays > 0 then cutReplay(selectedReplays) end
+end,playerFrame)
 
--- ===== Replay List Window =====
+-- Replay List
 local replayFrame
+local minimized = false
 function refreshReplayList()
     if replayFrame then replayFrame:Destroy() end
-    replayFrame = Instance.new("Frame", gui)
-    replayFrame.Size = UDim2.new(0, 320, 0, 320) -- lebih lebar biar muat tombol
-    replayFrame.Position = UDim2.new(0, 300, 0.5, -160)
-    replayFrame.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    replayFrame = Instance.new("Frame",gui)
+    replayFrame.Size = UDim2.new(0,320,0,420)
+    replayFrame.Position = UDim2.new(0,320,0.5,-210)
+    replayFrame.BackgroundColor3 = Color3.fromRGB(40,40,40)
     replayFrame.Active = true
     replayFrame.Draggable = true
-    Instance.new("UICorner", replayFrame).CornerRadius = UDim.new(0, 10)
+    Instance.new("UICorner",replayFrame).CornerRadius = UDim.new(0,10)
 
-    local closeBtn = Instance.new("TextButton", replayFrame)
-    closeBtn.Size = UDim2.new(0, 50, 0, 25)
-    closeBtn.Position = UDim2.new(1, -55, 0, 5)
-    closeBtn.Text = "X"
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200,50,50)
-    closeBtn.TextColor3 = Color3.new(1,1,1)
-    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0,4)
-    closeBtn.MouseButton1Click:Connect(function()
-        replayFrame:Destroy()
-        replayFrame = nil
+    local minBtn = Instance.new("TextButton",replayFrame)
+    minBtn.Size = UDim2.new(0,30,0,30)
+    minBtn.Position = UDim2.new(1,-35,0,5)
+    minBtn.Text = "-"
+    minBtn.BackgroundColor3 = Color3.fromRGB(100,100,100)
+    minBtn.TextColor3 = Color3.new(1,1,1)
+    Instance.new("UICorner",minBtn).CornerRadius = UDim.new(0,6)
+    minBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        replayFrame.Visible = not minimized
     end)
 
-    local yPos = 35
-    for name, rec in pairs(replayList) do
-        -- Nama replay (bisa diklik untuk load)
-        local btn = Instance.new("TextButton", replayFrame)
-        btn.Size = UDim2.new(0.55, -10, 0, 30)
-        btn.Position = UDim2.new(0, 10, 0, yPos)
-        btn.Text = name
-        btn.BackgroundColor3 = Color3.fromRGB(70,70,70)
-        btn.TextColor3 = Color3.new(1,1,1)
-        btn.Font = Enum.Font.Gotham
-        btn.TextSize = 14
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+    local yPos = 40
+    for name,rec in pairs(replayList) do
+        local check = Instance.new("TextButton",replayFrame)
+        check.Size = UDim2.new(0.1,0,0,28)
+        check.Position = UDim2.new(0,10,0,yPos)
+        check.Text = table.find(selectedReplays,name) and "✅" or "⬜"
+        check.BackgroundColor3 = Color3.fromRGB(100,100,100)
+        check.TextColor3 = Color3.new(1,1,1)
+        Instance.new("UICorner",check).CornerRadius = UDim.new(0,4)
 
-        btn.MouseButton1Click:Connect(function()
-            records = table.clone(rec)
-            print("✅ Loaded replay:", name, "Frames:", #records)
-        end)
-
-        -- RENAME
-        local renameBtn = Instance.new("TextButton", replayFrame)
-        renameBtn.Size = UDim2.new(0, 50, 0, 30)
-        renameBtn.Position = UDim2.new(0.55, 0, 0, yPos)
-        renameBtn.Text = "REN"
-        renameBtn.BackgroundColor3 = Color3.fromRGB(0,120,255)
-        renameBtn.TextColor3 = Color3.new(1,1,1)
-        Instance.new("UICorner", renameBtn).CornerRadius = UDim.new(0,6)
-        renameBtn.MouseButton1Click:Connect(function()
-            local newName = "Replay_"..os.date("%H%M%S")..".json"
-            replayList[newName] = rec
-            replayList[name] = nil
-            print("✏️ Rename:", name, "➡️", newName)
-            refreshReplayList()
-        end)
-
-        -- COPY
-        local copyBtn = Instance.new("TextButton", replayFrame)
-        copyBtn.Size = UDim2.new(0, 60, 0, 30)
-        copyBtn.Position = UDim2.new(0.55, 55, 0, yPos)
-        copyBtn.Text = "COPY"
-        copyBtn.BackgroundColor3 = Color3.fromRGB(50,200,50)
-        copyBtn.TextColor3 = Color3.new(1,1,1)
-        Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0,6)
-        copyBtn.MouseButton1Click:Connect(function()
-            local exportText = encodeRecordsToLua(rec)
-            if setclipboard then
-                setclipboard(exportText)
-                print("✅ Replay exported to clipboard (Lua format):", name)
+        check.MouseButton1Click:Connect(function()
+            local idx = table.find(selectedReplays,name)
+            if idx then
+                table.remove(selectedReplays,idx)
+                check.Text = "⬜"
             else
-                warn("❌ setclipboard() tidak tersedia di exploit ini.")
+                table.insert(selectedReplays,name)
+                check.Text = "✅"
             end
         end)
 
-        -- DEL
-        local delBtn = Instance.new("TextButton", replayFrame)
-        delBtn.Size = UDim2.new(0, 50, 0, 30)
-        delBtn.Position = UDim2.new(1, -60, 0, yPos)
-        delBtn.Text = "DEL"
-        delBtn.BackgroundColor3 = Color3.fromRGB(200,50,50)
-        delBtn.TextColor3 = Color3.new(1,1,1)
-        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0,6)
-        delBtn.MouseButton1Click:Connect(function()
-            replayList[name] = nil
-            print("🗑️ Replay dihapus:", name)
+        local btn = Instance.new("TextLabel",replayFrame)
+        btn.Size = UDim2.new(0.3,0,0,28)
+        btn.Position = UDim2.new(0.15,0,0,yPos)
+        btn.Text = name
+        btn.BackgroundColor3 = Color3.fromRGB(70,70,70)
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        Instance.new("UICorner",btn).CornerRadius = UDim.new(0,6)
+
+        -- Rename Button
+        local rename = Instance.new("TextButton",replayFrame)
+        rename.Size = UDim2.new(0.2,0,0,28)
+        rename.Position = UDim2.new(0.46,0,0,yPos)
+        rename.Text = "✏️"
+        rename.BackgroundColor3 = Color3.fromRGB(150,150,50)
+        rename.TextColor3 = Color3.new(1,1,1)
+        Instance.new("UICorner",rename).CornerRadius = UDim.new(0,6)
+        rename.MouseButton1Click:Connect(function()
+            local box = Instance.new("TextBox",replayFrame)
+            box.Size = UDim2.new(0.3,0,0,28)
+            box.Position = UDim2.new(0.15,0,0,yPos)
+            box.Text = name
+            box.BackgroundColor3 = Color3.fromRGB(90,90,90)
+            box.TextColor3 = Color3.new(1,1,1)
+            box.ClearTextOnFocus = false
+            box.FocusLost:Connect(function(enter)
+                if enter and box.Text ~= "" then
+                    replayList[box.Text] = replayList[name]
+                    replayList[name] = nil
+                    notify("✏️ Rename: "..name.." → "..box.Text)
+                    refreshReplayList()
+                else
+                    box:Destroy()
+                end
+            end)
+        end)
+
+        local copy = Instance.new("TextButton",replayFrame)
+        copy.Size = UDim2.new(0.15,0,0,28)
+        copy.Position = UDim2.new(0.67,0,0,yPos)
+        copy.Text = "COPY"
+        copy.BackgroundColor3 = Color3.fromRGB(50,150,50)
+        copy.TextColor3 = Color3.new(1,1,1)
+        Instance.new("UICorner",copy).CornerRadius = UDim.new(0,6)
+        copy.MouseButton1Click:Connect(function()
+            copyReplayToClipboard({name})
+        end)
+
+        local del = Instance.new("TextButton",replayFrame)
+        del.Size = UDim2.new(0.15,0,0,28)
+        del.Position = UDim2.new(0.84,0,0,yPos)
+        del.Text = "DEL"
+        del.BackgroundColor3 = Color3.fromRGB(200,50,50)
+        del.TextColor3 = Color3.new(1,1,1)
+        Instance.new("UICorner",del).CornerRadius = UDim.new(0,6)
+        del.MouseButton1Click:Connect(function()
+            replayList[name]=nil
+            local idx = table.find(selectedReplays,name)
+            if idx then table.remove(selectedReplays,idx) end
             refreshReplayList()
         end)
 
-        yPos = yPos + 40
+        yPos += 35
     end
+
+    -- Merge Section
+    local mergeBtn = Instance.new("TextButton",replayFrame)
+    mergeBtn.Size = UDim2.new(1,-20,0,30)
+    mergeBtn.Position = UDim2.new(0,10,0,yPos+35)
+    mergeBtn.Text = "🔗 Merge Selected"
+    mergeBtn.BackgroundColor3 = Color3.fromRGB(0,120,200)
+    mergeBtn.TextColor3 = Color3.new(1,1,1)
+    Instance.new("UICorner",mergeBtn).CornerRadius = UDim.new(0,6)
+    mergeBtn.MouseButton1Click:Connect(function()
+        mergeReplays(selectedReplays)
+    end)
+
+    local tpBtn = Instance.new("TextButton",replayFrame)
+    tpBtn.Size = UDim2.new(1,-20,0,30)
+    tpBtn.Position = UDim2.new(0,10,0,yPos+75)
+    tpBtn.Text = "⏩ TP to End"
+    tpBtn.BackgroundColor3 = Color3.fromRGB(200,100,0)
+    tpBtn.TextColor3 = Color3.new(1,1,1)
+    Instance.new("UICorner",tpBtn).CornerRadius = UDim.new(0,6)
+    tpBtn.MouseButton1Click:Connect(function()
+        if #selectedReplays > 0 then
+            local chosen = replayList[selectedReplays[1]]
+            if chosen and #chosen > 0 and hrp then
+                hrp.CFrame = chosen[#chosen].pos
+                notify("⏩ Teleported to END of replay")
+            end
+        else
+            notify("❌ Tidak ada replay yang dipilih!")
+        end
+    end)
 end
 
-makeBtn(nil, "📂 Open Replay List", 200, refreshReplayList, Color3.fromRGB(255,170,0))
-
--- ===== Info =====
-spawn(function()
-    wait(0.2)
-    print("ℹ️ Cara pakai: Start → Stop → replay otomatis muncul di list. Dari list bisa Load, Rename, Copy (Lua), atau Delete.")
-end)
+-- Auto load notify
+local count = 0
+for _ in pairs(replayList) do
+    count += 1
+end
+notify("📂 Auto Load: " .. count .. " replay ditemukan")
